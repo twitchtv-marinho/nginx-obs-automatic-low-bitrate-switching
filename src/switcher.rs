@@ -73,7 +73,7 @@ impl Switcher {
         // TODO: When changing only_switch_when_streaming also do a
         // notify so that it won't wait anymore
         if state.config.switcher.only_switch_when_streaming
-            && !state.broadcasting_software.is_streaming
+            && !state.broadcasting_software.any_streaming()
         {
             info!("Waiting till OBS starts streaming");
             return Some(state.broadcasting_software.start_streaming_notifier());
@@ -363,7 +363,7 @@ impl Switcher {
 
         info!("Scene switched to [{:?}] {}", switch_type, switch_scene);
 
-        if state.broadcasting_software.is_streaming
+        if state.broadcasting_software.any_streaming()
             && state.config.switcher.auto_switch_notification
             && let Some(chat) = &state.config.chat
         {

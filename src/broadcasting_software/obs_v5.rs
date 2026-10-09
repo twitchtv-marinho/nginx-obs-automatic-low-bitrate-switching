@@ -31,10 +31,14 @@ use crate::{
 
 use super::BroadcastingSoftwareLogic;
 
+/// MARINHO: saídas do YouTube e da Kick criadas pelo saidas-extras.lua no OBS
+pub const SAIDAS_EXTRAS: [&str; 2] = ["marinho_saida_yt", "marinho_saida_kick"];
+
 pub struct Obsv5 {
     connection: Arc<Mutex<Option<obws::Client>>>,
     connection_join: tokio::task::JoinHandle<()>,
     event_join: tokio::task::JoinHandle<()>,
+    extras_join: tokio::task::JoinHandle<()>,
 }
 
 impl Obsv5 {
@@ -64,12 +68,54 @@ impl Obsv5 {
             .await
         });
 
+        let extras_join = tokio::spawn(Self::extras_watcher(connection.clone(), state.clone()));
         let event_join = tokio::spawn(Self::event_handler(event_rx, state));
 
         Self {
             connection,
             connection_join,
             event_join,
+            extras_join,
+        }
+    }
+
+    /// MARINHO: a cada 2 s confere se o YouTube/Kick (saidas-extras.lua) estão no ar, para o switcher
+    /// trocar IRL/INSTAVEL também quando só eles estão ligados (com a Twitch desligada).
+    async fn extras_watcher(
+        connection: Arc<Mutex<Option<obws::Client>>>,
+        user_state: noalbs::UserState,
+    ) {
+        loop {
+            time::sleep(Duration::from_secs(2)).await;
+
+            let active = {
+                let connection = connection.lock().await;
+                let mut active = false;
+
+                if let Some(client) = connection.as_ref() {
+                    for name in SAIDAS_EXTRAS {
+                        if let Ok(status) = client.outputs().status(name).await
+                            && status.active
+                        {
+                            active = true;
+                        }
+                    }
+                }
+
+                active
+            };
+
+            let mut l = user_state.write().await;
+            let bs = &mut l.broadcasting_software;
+
+            if bs.extras_streaming != active {
+                bs.extras_streaming = active;
+
+                if active && !bs.is_streaming {
+                    bs.last_stream_started_at = std::time::Instant::now();
+                    bs.start_streaming_notifier().notify_waiters();
+                }
+            }
         }
     }
 
@@ -394,6 +440,36 @@ impl BroadcastingSoftwareLogic for Obsv5 {
             .ok_or(error::Error::UnableInitialConnection)?;
 
         Ok(client.streaming().stop().await?)
+    }
+
+    async fn trigger_hotkey(&self, name: &str) -> Result<(), error::Error> {
+        let connection = self.connection.lock().await;
+
+        let client = connection
+            .as_ref()
+            .ok_or(error::Error::UnableInitialConnection)?;
+
+        Ok(client.hotkeys().trigger_by_name(name, None).await?)
+    }
+
+    async fn streaming_active(&self) -> Result<bool, error::Error> {
+        let connection = self.connection.lock().await;
+
+        let client = connection
+            .as_ref()
+            .ok_or(error::Error::UnableInitialConnection)?;
+
+        Ok(client.streaming().status().await?.active)
+    }
+
+    async fn output_active(&self, name: &str) -> Result<bool, error::Error> {
+        let connection = self.connection.lock().await;
+
+        let client = connection
+            .as_ref()
+            .ok_or(error::Error::UnableInitialConnection)?;
+
+        Ok(client.outputs().status(name).await?.active)
     }
 
     async fn fix(&self) -> Result<(), error::Error> {
@@ -848,6 +924,7 @@ impl Drop for Obsv5 {
     fn drop(&mut self) {
         self.connection_join.abort();
         self.event_join.abort();
+        self.extras_join.abort();
     }
 }
 

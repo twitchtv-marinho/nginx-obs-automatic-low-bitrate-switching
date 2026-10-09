@@ -82,6 +82,8 @@ pub struct BroadcastingSoftwareState {
     pub current_scene: String,
     pub status: ClientStatus,
     pub is_streaming: bool,
+    /// MARINHO: YouTube/Kick (saídas do saidas-extras.lua no OBS) no ar, mesmo com a Twitch desligada
+    pub extras_streaming: bool,
     pub last_stream_started_at: std::time::Instant,
     pub initial_stream_status: Option<StreamStatus>,
     pub stream_status: Option<StreamStatus>,
@@ -106,6 +108,11 @@ impl BroadcastingSoftwareState {
     pub fn switch_scene_notifier(&self) -> Arc<Notify> {
         self.switch_scene_notifier.clone()
     }
+
+    /// MARINHO: alguma live no ar (Twitch pela saída principal, ou YouTube/Kick pelo saidas-extras.lua)
+    pub fn any_streaming(&self) -> bool {
+        self.is_streaming || self.extras_streaming
+    }
 }
 
 impl std::fmt::Debug for BroadcastingSoftwareState {
@@ -127,6 +134,7 @@ impl Default for BroadcastingSoftwareState {
             current_scene: String::new(),
             status: ClientStatus::Disconnected,
             is_streaming: false,
+            extras_streaming: false,
             connection: None,
             connected_notifier: Arc::new(Notify::new()),
             start_streaming_notifier: Arc::new(Notify::new()),

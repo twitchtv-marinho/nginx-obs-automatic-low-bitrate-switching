@@ -545,8 +545,14 @@ impl DispatchCommand {
             chat::Command::Noalbs => self.noalbs(params.next(), params).await,
             chat::Command::Notify => self.notify(params.next()).await,
             chat::Command::Rec => self.record().await,
-            chat::Command::Start => self.start().await,
-            chat::Command::Stop => self.stop(None).await,
+            chat::Command::Start => match params.next() {
+                Some(target) => self.platform_command(target, true).await,
+                None => self.start().await,
+            },
+            chat::Command::Stop => match params.next() {
+                Some(target) => self.platform_command(target, false).await,
+                None => self.stop(None).await,
+            },
             chat::Command::Switch => self.switch(params.next()).await,
             chat::Command::Trigger => {
                 self.trigger(switcher::TriggerType::Low, params.next())
@@ -739,7 +745,11 @@ impl DispatchCommand {
     }
 
     async fn start_normal(&self) -> bool {
-        let start = self.start_bsc().await;
+        // MARINHO: liga as 3 lives pelo saidas-extras.lua; sem o script no OBS, liga só a principal
+        let start = match self.hotkey("marinho_todas_ligar").await {
+            Ok(_) => Ok(()),
+            Err(_) => self.start_bsc().await,
+        };
 
         let msg = match start {
             Ok(_) => t!("start.success", locale = &self.lang),
@@ -748,7 +758,98 @@ impl DispatchCommand {
 
         self.send(msg).await;
 
+        if start.is_ok() {
+            self.send_platforms_summary().await;
+        }
+
         start.is_ok()
+    }
+
+    /// MARINHO: aperta um atalho do saidas-extras.lua no OBS
+    async fn hotkey(&self, name: &str) -> Result<(), error::Error> {
+        let state = self.user.state.read().await;
+
+        let bsc = state
+            .broadcasting_software
+            .connection
+            .as_ref()
+            .ok_or(error::Error::UnableInitialConnection)?;
+
+        bsc.trigger_hotkey(name).await
+    }
+
+    /// MARINHO: a live dessa plataforma (twitch, yt, kick) está no ar?
+    async fn platform_active(&self, id: &str) -> Result<bool, error::Error> {
+        let state = self.user.state.read().await;
+
+        let bsc = state
+            .broadcasting_software
+            .connection
+            .as_ref()
+            .ok_or(error::Error::UnableInitialConnection)?;
+
+        if id == "twitch" {
+            bsc.streaming_active().await
+        } else {
+            bsc.output_active(&format!("marinho_saida_{id}")).await
+        }
+    }
+
+    /// MARINHO: depois de ligar, espera as lives conectarem e diz no chat quais estão no ar
+    async fn send_platforms_summary(&self) {
+        time::sleep(time::Duration::from_secs(10)).await;
+
+        let mut parts = Vec::new();
+        for (id, name) in [("twitch", "Twitch"), ("yt", "YouTube"), ("kick", "Kick")] {
+            let mark = match self.platform_active(id).await {
+                Ok(true) => "✅",
+                Ok(false) => "❌",
+                Err(_) => "❔",
+            };
+            parts.push(format!("{name} {mark}"));
+        }
+
+        self.send(parts.join(" | ")).await;
+    }
+
+    /// MARINHO: !start/!stop com plataforma (twitch, yt, kick): liga ou desliga só aquela live
+    async fn platform_command(&self, target: &str, start: bool) {
+        let (id, name) = match target.to_lowercase().as_str() {
+            "twitch" | "tw" | "ttv" => ("twitch", "Twitch"),
+            "yt" | "youtube" => ("yt", "YouTube"),
+            "kick" | "kk" => ("kick", "Kick"),
+            _ => {
+                self.send(
+                    "Use !start ou !stop sozinho para as 3 lives, ou com twitch, yt ou kick para uma só (ex.: !stop kick)"
+                        .to_string(),
+                )
+                .await;
+                return;
+            }
+        };
+
+        let action = if start { "ligar" } else { "desligar" };
+        if let Err(e) = self.hotkey(&format!("marinho_{id}_{action}")).await {
+            self.send(format!("Não consegui {action} {name}: {e}")).await;
+            return;
+        }
+
+        if start {
+            self.send(format!("▶️ Ligando {name}...")).await;
+            time::sleep(time::Duration::from_secs(8)).await;
+        } else {
+            time::sleep(time::Duration::from_secs(3)).await;
+        }
+
+        let msg = match (self.platform_active(id).await, start) {
+            (Ok(true), true) => format!("✅ {name} no ar"),
+            (Ok(false), true) => format!("❌ {name} não entrou no ar (confira o OBS)"),
+            (Ok(false), false) => format!("⏹️ {name} desligado"),
+            (Ok(true), false) => format!("❌ {name} continua no ar (confira o OBS)"),
+            (Err(e), _) => format!("❔ Não consegui conferir {name}: {e}"),
+        };
+
+        self.send(msg).await;
     }
 
     async fn start_twitch_transcoding(&self) -> bool {
@@ -840,7 +941,11 @@ impl DispatchCommand {
                 .record_while_streaming
         };
 
-        let stop = self.stop_bsc().await;
+        // MARINHO: desliga as 3 lives pelo saidas-extras.lua; sem o script no OBS, desliga só a principal
+        let stop = match self.hotkey("marinho_todas_desligar").await {
+            Ok(_) => Ok(()),
+            Err(_) => self.stop_bsc().await,
+        };
 
         let success_msg = if let Some(info) = raid {
             let url = match info.platform {

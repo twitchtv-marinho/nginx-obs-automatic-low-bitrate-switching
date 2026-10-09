@@ -15,6 +15,15 @@ pub trait BroadcastingSoftwareLogic: Send + Sync {
 
     async fn stop_streaming(&self) -> Result<(), Error>;
 
+    /// MARINHO: aperta um atalho do OBS pelo nome (os do saidas-extras.lua)
+    async fn trigger_hotkey(&self, name: &str) -> Result<(), Error>;
+
+    /// MARINHO: a saída principal (Twitch) está no ar?
+    async fn streaming_active(&self) -> Result<bool, Error>;
+
+    /// MARINHO: uma saída pelo nome (marinho_saida_yt, marinho_saida_kick) está no ar?
+    async fn output_active(&self, name: &str) -> Result<bool, Error>;
+
     async fn toggle_recording(&self) -> Result<(), Error>;
 
     async fn is_recording(&self) -> Result<bool, Error>;
