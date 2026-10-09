@@ -1,0 +1,32 @@
+name: Build Windows (anúncios)
+
+on:
+  push:
+    branches:
+      - marinho-anuncios
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust estável
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Compilar
+        run: cargo build --release --locked
+
+      - name: Hash
+        shell: pwsh
+        run: (Get-FileHash target/release/noalbs.exe -Algorithm SHA256).Hash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noalbs-windows
+          path: target/release/noalbs.exe
+          retention-days: 30
