@@ -194,7 +194,13 @@ impl Announcer {
         info!("Twitch replies will be sent as {} announcements", color);
 
         Some(Self {
-            http: reqwest::Client::new(),
+            // Bounded Helix calls: on timeout announce() errors and the reply falls back
+            // to IRC, so a stuck Helix never holds the chat handler (or a state lock).
+            http: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(3))
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap_or_default(),
             token,
             color,
             ids: tokio::sync::OnceCell::new(),

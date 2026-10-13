@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use tokio::{sync::Notify, time::Instant};
-use tracing::{Instrument, debug, error, info};
+use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{
     chat, error,
@@ -201,7 +201,11 @@ impl Switcher {
                             kind: chat::InternalUpdate::OfflineTimeout,
                         });
 
-                    let _ = self.chat_sender.send(message).await;
+                    // Never wait on the chat channel while holding the state lock:
+                    // if it is full, only this chat notice is lost.
+                    if self.chat_sender.try_send(message).is_err() {
+                        warn!("Chat channel busy, offline timeout notice dropped");
+                    }
                 }
             }
 
@@ -343,7 +347,9 @@ impl Switcher {
             || !state
                 .switcher_state
                 .switchable_scenes
-                .contains(&state.broadcasting_software.current_scene)
+                // Use the scene OBS just reported, not the stored one: a chat switch
+                // (e.g. to the privacy scene) may not have reached the state yet.
+                .contains(&current_scene)
         {
             return Ok(());
         }
@@ -375,7 +381,11 @@ impl Switcher {
                     switch_type,
                 });
 
-            let _ = self.chat_sender.send(message).await;
+            // Never wait on the chat channel while holding the state lock:
+            // if it is full, only the "scene switched" notice is lost.
+            if self.chat_sender.try_send(message).is_err() {
+                warn!("Chat channel busy, scene switch notice dropped");
+            }
         }
 
         // In case there's a scene transition set that's longer than the time it takes to retrigger
