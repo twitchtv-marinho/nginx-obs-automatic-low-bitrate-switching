@@ -1081,6 +1081,8 @@ impl DispatchCommand {
         let scene = match &state.config.optional_scenes.refresh {
             Some(s) => s.to_owned(),
             None => {
+                // Release the read lock before sending: fix() asks for another read.
+                drop(state);
                 self.send(t!("refresh.noScene", locale = &self.lang)).await;
                 self.fix().await;
                 return;
@@ -1293,18 +1295,23 @@ impl DispatchCommand {
     }
 
     async fn switch_optional_scene(&self, scene_name: chat::OptionalScene) {
-        let state = self.user.state.read().await;
-        let optional_scenes = &state.config.optional_scenes;
-        let scene = match scene_name {
-            OptionalScene::Privacy => &optional_scenes.privacy,
-            OptionalScene::Starting => &optional_scenes.starting,
-            OptionalScene::Ending => &optional_scenes.ending,
+        // Copy the scene name and release the read lock before sending to chat:
+        // holding this read while self.switch asks for another one deadlocks if a
+        // writer (switcher, OBS events, extras watcher) queues in between.
+        let scene = {
+            let state = self.user.state.read().await;
+            let optional_scenes = &state.config.optional_scenes;
+            match scene_name {
+                OptionalScene::Privacy => optional_scenes.privacy.clone(),
+                OptionalScene::Starting => optional_scenes.starting.clone(),
+                OptionalScene::Ending => optional_scenes.ending.clone(),
+            }
         };
 
         if let Some(scene) = scene {
             self.send(t!("scene.success", locale = &self.lang, scene = scene_name))
                 .await;
-            self.switch(Some(scene)).await;
+            self.switch(Some(scene.as_str())).await;
         } else {
             self.send(t!("scene.error", locale = &self.lang, scene = scene_name))
                 .await;
@@ -1313,12 +1320,15 @@ impl DispatchCommand {
 
     // TODO: Actually switch to the right scene
     async fn live_scene(&self) {
-        let state = self.user.state.read().await;
-        let scene = &state.config.switcher.switching_scenes.normal;
+        // Same as switch_optional_scene: copy the name and release the lock first.
+        let scene = {
+            let state = self.user.state.read().await;
+            state.config.switcher.switching_scenes.normal.clone()
+        };
 
         self.send(t!("scene.success", locale = &self.lang, scene = "live"))
             .await;
-        self.switch(Some(scene)).await;
+        self.switch(Some(scene.as_str())).await;
     }
 
     async fn source_info<'a, I>(&self, server_name: I)
